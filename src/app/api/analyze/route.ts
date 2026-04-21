@@ -79,10 +79,35 @@ Return ONLY valid JSON, without any markdown formatting wrappers or explanation.
       }
     });
 
-    const aiText = response.text;
+    let aiText = response.text;
     
     if (!aiText) {
       throw new Error("Empty response from AI");
+    }
+
+    // Safely extract just the JSON object from the response
+    const jsonBlockMatch = aiText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (jsonBlockMatch) {
+      aiText = jsonBlockMatch[1];
+    } else {
+      const start = aiText.indexOf('{');
+      if (start !== -1) {
+        let depth = 0;
+        let end = -1;
+        for (let i = start; i < aiText.length; i++) {
+          if (aiText[i] === '{') depth++;
+          else if (aiText[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+        if (end !== -1) {
+          aiText = aiText.substring(start, end + 1);
+        }
+      }
     }
 
     const resultJSON = JSON.parse(aiText);
