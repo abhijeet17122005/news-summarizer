@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { JSDOM, VirtualConsole } from 'jsdom';
-import { Readability } from '@mozilla/readability';
+import * as cheerio from 'cheerio';
 import { GoogleGenAI } from '@google/genai';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
@@ -20,35 +19,48 @@ export async function POST(req: Request) {
     let textToAnalyze = data;
     let articleContext = "";
 
-    // 1. Fetch and Parse URL if it's a URL using Mozilla Readability
+    // 1. Fetch and Parse URL if it's a URL using Cheerio (much lighter than jsdom for Vercel)
     if (type === 'url') {
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s fetch timeout
+        
         const response = await fetch(data, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+          },
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
         
         if (!response.ok) {
           throw new Error(`Failed to fetch URL: ${response.statusText}`);
         }
         
         const html = await response.text();
+        const $ = cheerio.load(html);
         
-        // Suppress JSDOM CSS parsing errors from flooding the terminal
-        const virtualConsole = new VirtualConsole();
-        const doc = new JSDOM(html, { url: data, virtualConsole });
+        // Remove junk elements to clean the text extraction
+        $('script, style, nav, header, footer, iframe, noscript, aside, .advertisement').remove();
         
-        // Mozilla's magic article extractor
-        const reader = new Readability(doc.window.document);
-        const article = reader.parse();
+        // Extract paragraph text
+        const contentText = $('p, h1, h2, h3, h4, h5, h6, article')
+          .map((i, el) => $(el).text())
+          .get()
+          .join('\n')
+          .replace(/\s+/g, ' ')
+          .trim();
         
-        if (!article || !article.textContent || article.textContent.trim().length === 0) {
+        if (!contentText || contentText.length === 0) {
            return NextResponse.json({ error: 'Could not extract raw text from this URL. The site might be blocking us or is empty. Please try pasting raw text instead.' }, { status: 400 });
         }
         
-        textToAnalyze = article.textContent;
-        articleContext = `\n\nARTICLE TITLE: ${article.title}\nSITE: ${article.siteName}`;
+        textToAnalyze = contentText;
+        const title = $('title').text() || 'Unknown Title';
+        let siteName = 'Unknown Site';
+        try { siteName = new URL(data).hostname; } catch(e){}
+        
+        articleContext = `\n\nARTICLE TITLE: ${title}\nSITE: ${siteName}`;
         
       } catch (e: any) {
         return NextResponse.json({ error: `Failed to scrape URL: ${e.message}` }, { status: 400 });
