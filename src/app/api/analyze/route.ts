@@ -6,6 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 
 export async function POST(req: Request) {
