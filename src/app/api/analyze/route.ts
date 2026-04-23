@@ -10,7 +10,7 @@ export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
-    const { type, data, tone } = await req.json();
+    const { type, data, tone, language = "English" } = await req.json();
 
     if (!data) {
       return NextResponse.json({ error: 'Input data is required' }, { status: 400 });
@@ -77,13 +77,16 @@ export async function POST(req: Request) {
     // 2. Call Gemini API
     const systemPrompt = `You are an expert journalist and bias detector. Your task is to read the provided text and output a highly structured JSON response analyzing it.
     
+CRITICAL LANGUAGE INSTRUCTION:
+TRANSLATE THE ENTIRE RESPONSE TO ${language}. The "summary", "biasLabel", and "highlights" MUST absolutely be written natively in ${language}. If you reply in English when ${language} was requested, you fail.
+
 REQUIREMENTS:
-1. "summary": Summarize the article based on the user's requested tone: "${tone}". If the tone is "Explain like I'm 10", use very simple metaphors. If it's "Fact-only", strip all adjectives. Format this summary using RICH MARKDOWN (e.g., use **bolding** for key terms, use '-' bullet lists for multiple facts).
-2. "biasLabel": Analyze the sentiment/tone. Label must be EXACTLY ONE of: "Neutral", "Left-Leaning", "Right-Leaning", "Emotionally Charged".
+1. "summary": Provide a DETAILED and EXTENSIVE summary of the article. It MUST BE VERY LONG (minimum of 5-6 comprehensive paragraphs). Do not write a brief summary. Go into nuance. Format this summary using RICH MARKDOWN (e.g., use **bolding** for key terms, use '-' bullet lists for multiple facts). Write the actual summary text COMPLETELY in ${language}.
+2. "biasLabel": Analyze the sentiment/tone. Translate this absolute label strictly into ${language}.
 3. "confidence": A number from 0 to 100 representing how confident you are in your bias labeling.
 4. "wordCount": Estimated number of words in the source text.
 5. "emotionalIntensity": A number from 1 to 10 rating the sensationalism or emotional manipulation in the text (1 = completely dry facts, 10 = absolute propaganda/rage-bait).
-6. "highlights": An array of objects extracting up to 3 biased or emotionally charged phrases from the text. Each object must have "text" (the exact quote) and "reason" (why it shows bias).
+6. "highlights": An array of objects extracting up to 3 biased or emotionally charged phrases from the text. Each object must have "text" (the exact quote in the original language) and "reason" (why it shows bias, written in ${language}).
 
 Return ONLY valid JSON, without any markdown formatting wrappers or explanation.`;
 

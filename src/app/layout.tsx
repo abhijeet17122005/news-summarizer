@@ -28,6 +28,8 @@ export const metadata: Metadata = {
   },
 };
 
+import { Navigation } from "@/components/Navigation";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -39,7 +41,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground transition-colors duration-300">
-        {children}
+        <Navigation />
+        <div className="pt-16 flex-1">
+          {children}
+        </div>
       </body>
     </html>
   );

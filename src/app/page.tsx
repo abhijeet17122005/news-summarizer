@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import { 
   Bot, 
   Link as LinkIcon, 
@@ -14,7 +16,12 @@ import {
   Trash2,
   RefreshCcw,
   CheckCircle2,
-  Printer
+  Printer,
+  Download,
+  Volume2,
+  VolumeX,
+  Pause,
+  ExternalLink
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from 'react-markdown';
@@ -28,7 +35,7 @@ interface SourceState {
 }
 
 const getGridClasses = (count: number) => {
-  if (count === 1) return "max-w-3xl mx-auto";
+  if (count === 1) return "max-w-4xl mx-auto";
   if (count === 2) return "grid grid-cols-1 md:grid-cols-2 gap-8";
   return "grid grid-cols-1 lg:grid-cols-3 gap-6";
 };
@@ -80,16 +87,101 @@ const LoadingSkeleton = ({ sourceCount }: { sourceCount: number }) => (
 );
 
 
-export default function Home() {
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const initialUrl = searchParams.get('url');
+
   const [sources, setSources] = useState<SourceState[]>([
-    { id: Math.random().toString(36).substring(7), type: "url", data: "" }
+    { id: Math.random().toString(36).substring(7), type: "url", data: initialUrl || "" }
   ]);
   const [tone, setTone] = useState<string>("Neutral Summary");
+  const [language, setLanguage] = useState<string>("English");
   const [isLoading, setIsLoading] = useState(false);
   const [globalError, setGlobalError] = useState("");
   const [hasResults, setHasResults] = useState(false);
+  const [playingAudioFor, setPlayingAudioFor] = useState<string | null>(null);
+  const [trendingNews, setTrendingNews] = useState<any[]>([]);
+
+  // Automatically trigger analyze if tone/language changes and we already have results
+  const previousConfig = useRef({ tone: "Neutral Summary", language: "English" });
+  useEffect(() => {
+    if (hasResults && !isLoading) {
+      if (previousConfig.current.tone !== tone || previousConfig.current.language !== language) {
+        previousConfig.current = { tone, language };
+        handleAnalyze();
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tone, language]);
+
+  useEffect(() => {
+    fetch('/api/feed')
+     .then(res => res.json())
+     .then(data => {
+       if (data.articles) setTrendingNews(data.articles.slice(0, 4));
+     })
+     .catch(() => {});
+  }, []);
+
+  const handleDownloadCard = async (id: string) => {
+    const node = document.getElementById(`card-${id}`);
+    if (node) {
+      try {
+        const { toPng } = await import('html-to-image');
+        const dataUrl = await toPng(node, { cacheBust: true, backgroundColor: '#09090b', style: { transform: 'scale(1)' } });
+        const link = document.createElement('a');
+        link.download = `bias-analysis.png`;
+        link.href = dataUrl;
+        link.click();
+      } catch (err) {
+        console.error("Failed to generate image", err);
+      }
+    }
+  };
+
+  const toggleAudio = (id: string, text: string) => {
+    if (!window.speechSynthesis) return;
+    
+    if (playingAudioFor === id) {
+      window.speechSynthesis.cancel();
+      setPlayingAudioFor(null);
+    } else {
+      window.speechSynthesis.cancel();
+      // Strip markdown using basic regex for speech output
+      const cleanText = text.replace(/[*#]/g, '').replace(/\[(.*?)\]\(.*?\)/g, '$1');
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      const langMap: Record<string, string> = { "English": "en-US", "Spanish": "es-ES", "French": "fr-FR", "German": "de-DE", "Hindi": "hi-IN", "Arabic": "ar-SA", "Chinese": "zh-CN" };
+      if (langMap[language]) {
+         utterance.lang = langMap[language];
+         const voices = window.speechSynthesis.getVoices();
+         // Try exact match then fallback to base language
+         const targetLang = langMap[language];
+         const targetBase = targetLang.split('-')[0];
+         const voice = voices.find(v => v.lang.replace('_', '-') === targetLang) || 
+                       voices.find(v => v.lang.toLowerCase().includes(targetLang.toLowerCase())) || 
+                       voices.find(v => v.lang.toLowerCase().includes(targetBase.toLowerCase()));
+         if (voice) {
+           utterance.voice = voice;
+         }
+      }
+      utterance.onend = () => setPlayingAudioFor(null);
+      window.speechSynthesis.speak(utterance);
+      setPlayingAudioFor(id);
+    }
+  };
+
+  // Auto-analyze if URL is present on mount
+  useEffect(() => {
+    if (initialUrl && !hasResults && !isLoading) {
+      setTimeout(() => {
+        handleAnalyze();
+      }, 100); // slight delay to allow state to settle
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialUrl]);
 
   const TONES = ["Neutral Summary", "Fact-Only", "Explain like I'm 10"];
+  const LANGUAGES = ["English", "Spanish", "French", "German", "Hindi", "Arabic", "Chinese"];
 
   const generateSource = (): SourceState => ({
     id: Math.random().toString(36).substring(7),
@@ -155,7 +247,7 @@ export default function Home() {
           const res = await fetch("/api/analyze", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ type: source.type, data: source.data, tone }),
+            body: JSON.stringify({ type: source.type, data: source.data, tone, language }),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Analysis failed");
@@ -174,6 +266,21 @@ export default function Home() {
         return s;
       }));
       setHasResults(true); // Now reveal actual data
+
+      // Save history to LocalStorage
+      try {
+        const history = JSON.parse(localStorage.getItem('news_history') || '[]');
+        const newHistory = validSources.map((s) => {
+          const result = outcomes.find(o => o.id === s.id)?.result;
+          // create a short title from the summary if no title is present
+          const title = result ? result.summary.split('\n')[0].replace(/[*#]/g, '').substring(0, 60) + "..." : "Unknown Title";
+          return result ? { source: s.data, bias: result.biasLabel, date: new Date().toISOString(), title } : null;
+        }).filter(Boolean);
+        localStorage.setItem('news_history', JSON.stringify([...newHistory, ...history].slice(0, 50)));
+      } catch (e) {
+        console.error("Local storage error:", e);
+      }
+
     } catch (err: any) {
       setGlobalError("A critical error occurred analyzing the sources.");
     } finally {
@@ -218,32 +325,93 @@ export default function Home() {
           <motion.p 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="text-lg text-foreground/70 max-w-2xl mx-auto font-medium"
+            className="text-lg text-foreground/70 max-w-2xl mx-auto font-medium mb-8"
           >
             Instantly compare multiple perspectives. Extract the raw facts, identify hidden rhetoric, and summarize narratives seamlessly.
           </motion.p>
+          
+          {/* Live Trending Widget */}
+          {!hasResults && trendingNews.length > 0 && (
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="max-w-4xl mx-auto mt-8 hidden sm:block"
+            >
+               <div className="flex items-center gap-2 mb-3 px-2">
+                 <Activity className="w-4 h-4 text-brand-400" />
+                 <span className="text-xs font-bold uppercase tracking-widest text-foreground/60">Trending Right Now</span>
+               </div>
+               <div className="grid grid-cols-4 gap-4 text-left">
+                  {trendingNews.map((news, i) => (
+                    <a 
+                      key={i}
+                      href={news.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="glass-panel p-3 hover:-translate-y-1 hover:border-brand-500/30 transition-all flex flex-col gap-2 relative overflow-hidden group focus:outline-none"
+                      title="Read original article"
+                    >
+                      <div className="absolute top-0 right-0 w-16 h-16 bg-brand-500/10 blur-xl -mr-6 -mt-6 rounded-full group-hover:bg-brand-500/20 transition-colors"></div>
+                      
+                      <div className="flex justify-between items-start">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-brand-400">{news.source}</span>
+                        <div className="text-foreground/40 group-hover:text-brand-400 transition-colors z-10">
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                      
+                      <div className="text-left w-full h-full flex flex-col justify-between">
+                        <p className="text-xs font-medium line-clamp-3 text-foreground/90">{news.title}</p>
+                        <p className="text-[10px] text-brand-400/80 mt-2 flex items-center gap-1 font-bold group-hover:text-brand-300">
+                          Read Original News
+                        </p>
+                      </div>
+                    </a>
+                  ))}
+               </div>
+            </motion.div>
+          )}
         </header>
 
         {/* Global Tone Selector */}
-        {!hasResults && !isLoading && (
+        {!isLoading && (
            <motion.div 
              initial={{ opacity: 0, y: 10 }}
              animate={{ opacity: 1, y: 0 }}
-             className="max-w-3xl mx-auto glass-panel p-6"
+             className="max-w-4xl mx-auto glass-panel p-6 space-y-6"
            >
-             <h3 className="text-sm border-b border-glass-border pb-3 font-semibold text-foreground/80 flex items-center justify-center gap-2 mb-4 uppercase tracking-widest">
-               <Sparkles className="w-4 h-4 text-brand-400" /> Global Summary Tone Configuration
-             </h3>
-             <div className="flex flex-wrap justify-center gap-3">
-               {TONES.map(t => (
-                 <button
-                   key={t}
-                   onClick={() => setTone(t)}
-                   className={`px-5 py-2.5 rounded-full text-sm font-bold border transition-all ${tone === t ? 'border-brand-500 bg-brand-500/20 text-brand-400 shadow-[0_0_20px_rgba(99,102,241,0.25)]' : 'border-glass-border hover:border-brand-500/50 text-foreground/60 hover:text-foreground'}`}
-                 >
-                   {t}
-                 </button>
-               ))}
+             <div>
+               <h3 className="text-sm border-b border-glass-border pb-3 font-semibold text-foreground/80 flex items-center justify-center gap-2 mb-4 uppercase tracking-widest">
+                 <Sparkles className="w-4 h-4 text-brand-400" /> Global Summary Tone
+               </h3>
+               <div className="flex flex-wrap justify-center gap-3">
+                 {TONES.map(t => (
+                   <button
+                     key={t}
+                     onClick={() => setTone(t)}
+                     className={`px-5 py-2.5 rounded-full text-sm font-bold border transition-all ${tone === t ? 'border-brand-500 bg-brand-500/20 text-brand-400 shadow-[0_0_20px_rgba(99,102,241,0.25)]' : 'border-glass-border hover:border-brand-500/50 text-foreground/60 hover:text-foreground'}`}
+                   >
+                     {t}
+                   </button>
+                 ))}
+               </div>
+             </div>
+             
+             <div>
+               <h3 className="text-sm border-b border-glass-border pb-3 font-semibold text-foreground/80 flex items-center justify-center gap-2 mb-4 uppercase tracking-widest">
+                 Output Language
+               </h3>
+               <div className="flex flex-wrap justify-center gap-2">
+                 {LANGUAGES.map(l => (
+                   <button
+                     key={l}
+                     onClick={() => setLanguage(l)}
+                     className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all ${language === l ? 'border-green-500 bg-green-500/20 text-green-400 shadow-[0_0_15px_rgba(34,197,94,0.2)]' : 'border-glass-border hover:border-green-500/50 text-foreground/60 hover:text-foreground'}`}
+                   >
+                     {l}
+                   </button>
+                 ))}
+               </div>
              </div>
            </motion.div>
         )}
@@ -361,7 +529,7 @@ export default function Home() {
             </div>
           </div>
         ) : hasResults ? (
-          <div className="space-y-8 relative">
+          <div className="space-y-8 relative max-w-4xl mx-auto">
             <div className="flex justify-between items-center bg-black/30 p-4 rounded-2xl border border-glass-border shadow-lg print-hidden">
                <h2 className="text-xl font-bold flex items-center gap-3">
                  <CheckCircle2 className="w-6 h-6 text-green-400" /> Comparison Dashboard
@@ -388,10 +556,11 @@ export default function Home() {
               {sources.map((source, index) => (
                 <motion.div 
                   key={source.id}
+                  id={`card-${source.id}`}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.15 }}
-                  className="glass-panel flex flex-col h-full overflow-hidden hover:border-glass-border/70 transition-colors"
+                  className="glass-panel flex flex-col h-full overflow-hidden hover:border-glass-border/70 transition-colors bg-background"
                 >
                   {/* Article Source Header */}
                   <div className="bg-black/30 p-4 border-b border-glass-border flex flex-col gap-2 relative">
@@ -462,9 +631,19 @@ export default function Home() {
                       <div className="p-6 space-y-6 flex-1 bg-black/10">
                         {/* SUMMARY */}
                         <div>
-                          <h4 className="text-xs tracking-widest uppercase text-foreground/50 font-bold mb-3 flex items-center gap-2">
-                            <FileText className="w-4 h-4" /> Summary
-                          </h4>
+                          <div className="flex justify-between items-center mb-3">
+                            <h4 className="text-xs tracking-widest uppercase text-foreground/50 font-bold flex items-center gap-2">
+                              <FileText className="w-4 h-4" /> Summary
+                            </h4>
+                            <div className="flex gap-3 print-hidden mt-2 sm:mt-0">
+                              <button onClick={() => toggleAudio(source.id, source.result.summary)} className="px-5 py-2.5 flex items-center gap-2 bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 rounded-lg transition-colors font-bold text-sm shadow-sm" title="Listen to Summary">
+                                {playingAudioFor === source.id ? <><Pause className="w-4 h-4" /> Pause Audio</> : <><Volume2 className="w-4 h-4" /> Read Aloud</>}
+                              </button>
+                              <button onClick={() => handleDownloadCard(source.id)} className="px-5 py-2.5 flex items-center gap-2 bg-green-500/10 hover:bg-green-500/20 text-green-400 rounded-lg transition-colors font-bold text-sm shadow-sm" title="Download Report">
+                                <Download className="w-4 h-4" /> Save Image
+                              </button>
+                            </div>
+                          </div>
                           <div className="text-sm text-foreground/90 leading-relaxed font-medium">
                             <ReactMarkdown
                               components={{
@@ -511,5 +690,13 @@ export default function Home() {
         ) : null}
       </div>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center mt-20 text-brand-400 font-bold animate-pulse">Loading Analyzer...</div>}>
+      <HomeContent />
+    </Suspense>
   );
 }

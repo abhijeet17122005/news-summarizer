@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "News Analyst Extension",
+  "version": "1.0",
+  "description": "Instantly analyze news articles for bias using the News Analyst AI Platforms.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Analyze News Bias"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "icons": {
+    "16": "icon-16.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  }
+}
